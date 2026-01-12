@@ -11,4 +11,7 @@ Repository for emotion quality (EmoQ) detection model used in TTS generated spee
 
 ![Emotion Label Distribution](assets/emotion_label_distribution.png)
 
+# Model inference
 
+- Download weights from Huggingface: https://huggingface.co/asya-ai/Emo-Q-Wav2vec2
+- 

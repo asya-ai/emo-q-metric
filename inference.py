@@ -20,7 +20,7 @@ class EmoProcess:
             datasource_samplerate=16000,
             step_sample_length=1 * 16000,
             window_sample_length=4 * 16000,
-            model_path="./ckpt/checkpoint-3684",
+            model_path="asya-ai/Emo-Q-Wav2vec2",
             is_debug=False
     ):
         self.args = args
@@ -34,8 +34,15 @@ class EmoProcess:
         self.emotions_input_size = 64000
         self.emotion_presence_threshold = 0.1  # Threshold for considering emotion presence in given speech segment
 
-        emotion_feature_extractor = AutoFeatureExtractor.from_pretrained(model_path, local_files_only=True)
-        emotion_model = AutoModelForAudioClassification.from_pretrained(model_path, local_files_only=True).to("cuda")
+        if os.path.exists(model_path):
+            emotion_feature_extractor = AutoFeatureExtractor.from_pretrained(model_path, local_files_only=True)
+            emotion_model = AutoModelForAudioClassification.from_pretrained(model_path, local_files_only=True).to(
+                "cuda")
+        else:  # huggingface hub type id
+            emotion_feature_extractor = AutoFeatureExtractor.from_pretrained(model_path)
+            emotion_model = AutoModelForAudioClassification.from_pretrained(model_path).to(
+                "cuda")
+
         self.emotion_detection_pipeline = pipeline(
             "audio-classification",
             model=emotion_model,
@@ -139,7 +146,7 @@ class EmoProcess:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-device', default='cuda', type=str)
-    parser.add_argument('-model_path', default='./ckpt/checkpoint-3684', type=str)
+    parser.add_argument('-model_path', default='asya-ai/Emo-Q-Wav2vec2', type=str)
     parser.add_argument('-datasource_samplerate', default=16000, type=int)
     parser.add_argument('-step_sample_length', default=1 * 16000, type=int)
     parser.add_argument('-window_sample_length', default=4 * 16000, type=int)  # 4sec as used in model training
