@@ -27,7 +27,7 @@ class GenMOSMetric(BaseModel):
 
 
 if __name__ == "__main__":
-    api_key = ''
+    api_key = ''  # TODO load from env
     model_name = "gemini-3-pro-preview"
     client = genai.Client(api_key=api_key)
 
