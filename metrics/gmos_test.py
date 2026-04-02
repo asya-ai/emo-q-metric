@@ -1,89 +1,223 @@
-import csv
 import os
-import random
-import time
-
-import numpy as np
+import enum
 import pandas as pd
-import librosa
-import soundfile as sf
-from google import genai
-from loguru import logger
 from tqdm import tqdm
+from loguru import logger
 from pydantic import BaseModel, Field
+from google import genai
 
 
-class GenMOSMetric(BaseModel):
-    speech_content_clarity_value: float = Field(
-        ge=1.0,
-        le=5.0,
-        description="Speech content clarity score (How interpretable is the spoken content)."
+class ProsodyQuality(enum.Enum):
+    natural = "natural"
+    slightly_flat = "slightly_flat"
+    flat = "flat"
+    very_flat = "very_flat"
+
+
+class ExpressivenessLevel(enum.Enum):
+    high = "high"
+    medium = "medium"
+    low = "low"
+    none = "none"
+
+
+class ArtifactsPresentLevel(enum.Enum):
+    high = "high"
+    medium = "medium"
+    low = "low"
+    none = "none"
+
+
+class GenMOSAnalysis(BaseModel):
+    is_clearly_synthetic: bool = Field(
+        description="True if the speech is clearly machine-generated."
     )
-    audio_quality_value: float = Field(
-        ge=1.0,
-        le=5.0,
-        description="Audio quality score (How good is the general quality of the audio)."
+    prosody_quality: ProsodyQuality = Field(
+        description="Prosody quality: natural, slightly_flat, flat, very_flat"
     )
+    expressiveness: ExpressivenessLevel = Field(
+        description="Expressiveness level: high, medium, low, none"
+    )
+    present_artifacts_level: ArtifactsPresentLevel = Field(
+        description="What is the level of artifacts present in speech audio: high, medium, low, none"
+    )
+
+
+class GenMOSRawScores(BaseModel):
+    speech_content_clarity_value: float = Field(ge=1.0, le=5.0)
+    audio_quality_value: float = Field(ge=1.0, le=5.0)
+
+
+def apply_human_penalties(raw_audio_mos, analysis: GenMOSAnalysis):
+    mos = raw_audio_mos
+
+    # Hard cap for synthetic speech
+    if analysis.is_clearly_synthetic:
+        mos = min(mos, 2.5)
+
+    # Prosody penalties
+    prosody_penalty = {
+        "natural": 0.0,
+        "slightly_flat": 0.3,
+        "flat": 0.6,
+        "very_flat": 1.0,
+    }
+    mos -= prosody_penalty.get(analysis.prosody_quality, 0.5)
+
+    # Expressiveness penalties
+    expressiveness_penalty = {
+        "high": 0.0,
+        "medium": 0.3,
+        "low": 0.6,
+        "none": 1.0,
+    }
+    mos -= expressiveness_penalty.get(analysis.expressiveness, 0.5)
+
+    # based on artifacts level substract score
+    artifacts_penalty = {
+        "none": 0.0,
+        "low": 0.3,
+        "medium": 0.6,
+        "high": 1.0,
+    }
+    mos -= artifacts_penalty.get(analysis.present_artifacts_level, 0.5)
+
+    return float(max(1.0, min(5.0, mos)))
 
 
 if __name__ == "__main__":
-    api_key = ''  # TODO load from env
+    api_key = "<>"  # insert your GEMINI api key here
     model_name = "gemini-3-pro-preview"
+
     client = genai.Client(api_key=api_key)
 
-    root_path = "/media/storage_2/data/raw/tts_validation/en/styletts2_tts_valid_output"
-    df_path = f"{root_path}/metadata.csv"
-    df = pd.read_csv(df_path, sep=",")
-    df = df.reindex(columns=df.columns.tolist() + ['gmos_score_speech_clarity'])
-    df = df.reindex(columns=df.columns.tolist() + ['gmos_score_audio_quality'])
-    df['gmos_score_speech_clarity'] = 1.0
-    df['gmos_score_audio_quality'] = 1.0
+    root_path = "/media/storage_2/data/raw/tts_validation/en/coqui_tts_valid_output"
+    df = pd.read_csv(f"{root_path}/metadata.csv")
 
-    total_hours = 0.0
-    last_processed_idx = 0
-    for idx, row in tqdm(df.iterrows()):
+
+    for col in [
+        "gmos_speech_clarity",
+        "gmos_raw_audio_quality",
+        "gmos_final_audio_quality",
+        "gmos_final_genmos",
+        "gmos_is_synthetic",
+        "gmos_prosody",
+        "gmos_expressiveness",
+        "gmos_artifacts",
+    ]:
+        if col not in df:
+            df[col] = None
+
+    for idx, row in tqdm(df.iterrows(), total=len(df)):
+        wav_path = f"{root_path}/{row[0]}"
         transcription = row[1].strip()
-        file_name_original = row[0]
-
-        if idx <= last_processed_idx:
-            logger.info(f"Skipping index {idx} as it has already been processed")
-            continue
-
-        file_source_path = f"{root_path}/{file_name_original}"
-        my_wav_file = client.files.upload(file=file_source_path)
 
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=
-                [
-                    """
-                    You will receive an audio speech sample.
-                    Your task is to rate the spoken content clarity and overall audio quality.
-                    """,
-                    my_wav_file
-                ],
-                config={
-                    "response_mime_type": "application/json",
-                    "response_json_schema": GenMOSMetric.model_json_schema(),
-                }
+            audio_file = client.files.upload(file=wav_path)
+
+
+            analysis_prompt = """
+Analyze the given Latvian speech sample critically.
+
+PENALIZE:
+- Flat or monotone intonation (no expressiveness)
+- Incorrect Latvian stress or rhythm
+- Robotic timing
+- Vocoder buzz or artifacts
+
+"""
+
+            try:
+                analysis_resp = client.models.generate_content(
+                    model=model_name,
+                    contents=[analysis_prompt, audio_file],
+                    config={
+                        "temperature": 0.1,
+                        "response_mime_type": "application/json",
+                        "response_json_schema": GenMOSAnalysis.model_json_schema()
+                    },
+                )
+                analysis = GenMOSAnalysis.model_validate_json(
+                    analysis_resp.text
+                )
+            except Exception as e:
+                logger.error(f"Analysis generation failed {analysis_resp.text}: {e}")
+
+                analysis = GenMOSAnalysis(
+                    is_clearly_synthetic=True,
+                    prosody_quality="flat",
+                    expressiveness="none",
+                    present_artifacts_level="high",
+                )
+
+
+            mos_prompt = """
+You are performing human MOS evaluation for samples generated by Latvian TTS.
+
+SCORING RULES:
+5.0 = Indistinguishable from a human speaker recording
+4.0 = Very good, minor synthetic cues
+3.0 = Synthetic but acceptable
+2.0 = Robotic, unnatural
+1.0 = Very poor
+
+Use the FULL scale to rate the following aspects separately:
+1) Speech Content Clarity: How clear and understandable is the spoken content?
+2) Audio Quality: Overall audio quality, including presence of artifacts, noise, or distortion.
+
+"""
+
+            try:
+                mos_resp = client.models.generate_content(
+                    model=model_name,
+                    contents=[mos_prompt, audio_file],
+                    config={
+                        "temperature": 0.1,
+                        "response_mime_type": "application/json",
+                        "response_json_schema": GenMOSRawScores.model_json_schema()
+                    },
+                )
+                raw_mos = GenMOSRawScores.model_validate_json(
+                    mos_resp.text
+                )
+            except Exception as e:
+                logger.error(f"Analysis generation failed {mos_resp.text}: {e}")
+
+                raw_mos = GenMOSRawScores(
+                    speech_content_clarity_value=2.0,
+                    audio_quality_value=2.0,
+                )
+
+            ### -----------------------------
+            ### Final MOS mapping
+            final_audio_mos = apply_human_penalties(
+                raw_mos.audio_quality_value, analysis
             )
-            mos_metrics = GenMOSMetric.model_validate_json(response.text)
-            speech_content_clarity_value = mos_metrics.speech_content_clarity_value
-            audio_quality_value = mos_metrics.audio_quality_value
+
+            final_genmos = (
+                0.35 * raw_mos.speech_content_clarity_value + 0.65 * final_audio_mos
+            )
+
+            if analysis.is_clearly_synthetic and analysis.prosody_quality in ["flat", "very_flat"]:
+                final_genmos = min(final_genmos, 2.5)
+
+            final_genmos = float(max(1.0, min(5.0, final_genmos)))
+
+            logger.info(f"Processed {wav_path} - Final GenMOS: {final_genmos}")
+
+
+            df.at[idx, "gmos_speech_clarity"] = raw_mos.speech_content_clarity_value
+            df.at[idx, "gmos_raw_audio_quality"] = raw_mos.audio_quality_value
+            df.at[idx, "gmos_final_audio_quality"] = final_audio_mos
+            df.at[idx, "gmos_final_genmos"] = final_genmos
+
+            df.at[idx, "gmos_is_synthetic"] = analysis.is_clearly_synthetic
+            df.at[idx, "gmos_prosody"] = analysis.prosody_quality
+            df.at[idx, "gmos_expressiveness"] = analysis.expressiveness
+            df.at[idx, "gmos_artifacts"] = analysis.present_artifacts_level
+
         except Exception as e:
-            logger.error(e)
-            speech_content_clarity_value = 1.0
-            audio_quality_value = 1.0
+            logger.error(f"Failed on {wav_path}: {e}")
+            exit()
 
-        print(speech_content_clarity_value)
-        print(audio_quality_value)
-        df.at[idx, 'gmos_score_speech_clarity'] = float(speech_content_clarity_value)
-        df.at[idx, 'gmos_score_audio_quality'] = float(audio_quality_value)
-
-    df.to_csv(f"{root_path}/metadata_gmos.csv", index=False)
-
-    """
-    Final score:
-    gmos = 0.5 * (speech_content_clarity_value + audio_quality_value)
-    """
+    df.to_csv(f"{root_path}/metadata_gmos_v3.csv", index=False)

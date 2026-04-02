@@ -18,3 +18,10 @@ Data was structured in 2 classes [happiness, anger, sadness] vs [other] -> **emo
 # Model inference
 
 - Weights are automatically downloaded from Huggingface: https://huggingface.co/asya-ai/Emo-Q-Wav2vec2
+
+
+# Metrics
+
+- GenMOS: script is availablein the `metrics` folder, it is used to calculate the GenMOS score for the generated speech samples.
+- EmoQ: script is ./inference.py
+- NISQA: script is available in the `metrics` folder, it is used to calculate the NISQA score for the generated speech samples.
