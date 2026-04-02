@@ -23,5 +23,8 @@ Data was structured in 2 classes [happiness, anger, sadness] vs [other] -> **emo
 # Metrics
 
 - GenMOS: script is availablein the `metrics` folder, it is used to calculate the GenMOS score for the generated speech samples.
+    - Pass a path to the generated speech directory containing .wav files and metadata.csv file with minimal columns [file_name, transcription]
+    - Output will be a .csv (metadata_gmos) file with GenMOS scores for each sample in the input directory.
+
 - EmoQ: script is ./inference.py
 - NISQA: script is available in the `metrics` folder, it is used to calculate the NISQA score for the generated speech samples.
