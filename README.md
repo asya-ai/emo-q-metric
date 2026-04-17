@@ -1,4 +1,4 @@
-# Emo-Q-metric
+# Emo-Q-metric (EmoQ asya.ai metric)
 Repository for emotion quality (EmoQ) detection model used in TTS generated speech assessment.
 
 ### Emotion Training dataset stats
